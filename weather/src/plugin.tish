@@ -1,0 +1,201 @@
+// Weather: current conditions and a 7-day forecast from Open-Meteo, which needs no API key.
+// A Tier A plugin: it reaches only the two Open-Meteo hosts its manifest names.
+//
+//   weather            the last city you looked up
+//   weather paris      Paris (the first match; more matches are listed below the forecast)
+//   weather 10001 f    in Fahrenheit (the unit is remembered)
+
+const GEO = "https://geocoding-api.open-meteo.com/v1/search?count=5&language=en&format=json&name="
+const FORECAST = "https://api.open-meteo.com/v1/forecast"
+const CACHE_MS = 10 * 60 * 1000
+
+// WMO weather codes -> [label, SF Symbol].
+const CODES = {
+  "0": ["Clear", "sun.max"], "1": ["Mostly clear", "sun.min"], "2": ["Partly cloudy", "cloud.sun"], "3": ["Overcast", "cloud"],
+  "45": ["Fog", "cloud.fog"], "48": ["Freezing fog", "cloud.fog"],
+  "51": ["Light drizzle", "cloud.drizzle"], "53": ["Drizzle", "cloud.drizzle"], "55": ["Heavy drizzle", "cloud.drizzle"],
+  "56": ["Freezing drizzle", "cloud.sleet"], "57": ["Freezing drizzle", "cloud.sleet"],
+  "61": ["Light rain", "cloud.rain"], "63": ["Rain", "cloud.rain"], "65": ["Heavy rain", "cloud.heavyrain"],
+  "66": ["Freezing rain", "cloud.sleet"], "67": ["Freezing rain", "cloud.sleet"],
+  "71": ["Light snow", "cloud.snow"], "73": ["Snow", "cloud.snow"], "75": ["Heavy snow", "snowflake"], "77": ["Snow grains", "snowflake"],
+  "80": ["Showers", "cloud.sun.rain"], "81": ["Showers", "cloud.rain"], "82": ["Violent showers", "cloud.heavyrain"],
+  "85": ["Snow showers", "cloud.snow"], "86": ["Snow showers", "cloud.snow"],
+  "95": ["Thunderstorm", "cloud.bolt"], "96": ["Thunderstorm, hail", "cloud.bolt.rain"], "99": ["Thunderstorm, hail", "cloud.bolt.rain"]
+}
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+fn parse(text, fallback) {
+  try {
+    return text ? JSON.parse(text) : fallback
+  } catch (e) {
+    return fallback
+  }
+}
+
+// Lookups by lower-cased query: { done, places, error }. Forecasts by "lat,lon,unit": { at, done, data, error }.
+let places = {}
+let forecasts = {}
+
+fn code(n) {
+  let c = CODES["" + n]
+  return c ? c : ["Weather", "cloud"]
+}
+
+fn notice(title, subtitle) {
+  return [{ title: title, subtitle: subtitle, icon: "symbol:cloud.sun" }]
+}
+
+fn lookup(q) {
+  if (q in places) {
+    return places[q]
+  }
+  let entry = { done: false, places: [], error: "" }
+  places[q] = entry
+  moo.fetch({ method: "GET", url: GEO + encodeURIComponent(q) }, (r) => {
+    entry.done = true
+    let body = parse(r.body, null)
+    if (r.error !== "" || body === null) {
+      entry.error = r.error !== "" ? r.error : "Open-Meteo answered " + r.status
+    } else {
+      entry.places = body.results ? body.results : []
+    }
+    moo.refresh()
+  })
+  return entry
+}
+
+fn forecast(place, unit) {
+  let key = place.latitude + "," + place.longitude + "," + unit
+  let have = forecasts[key]
+  if (have && (!have.done || Date.now() - have.at < CACHE_MS)) {
+    return have
+  }
+  let entry = { at: Date.now(), done: false, data: null, error: "" }
+  forecasts[key] = entry
+  let url = FORECAST + "?latitude=" + place.latitude + "&longitude=" + place.longitude
+    + "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m"
+    + "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+    + "&timezone=auto&forecast_days=7"
+    + (unit === "f" ? "&temperature_unit=fahrenheit&wind_speed_unit=mph" : "")
+  moo.fetch({ method: "GET", url: url }, (r) => {
+    entry.done = true
+    let body = parse(r.body, null)
+    if (r.error !== "" || body === null || !body.current) {
+      entry.error = r.error !== "" ? r.error : "Open-Meteo answered " + r.status
+    } else {
+      entry.data = body
+    }
+    moo.refresh()
+  })
+  return entry
+}
+
+fn placeName(p) {
+  let parts = [p.name]
+  if (p.admin1 && p.admin1 !== p.name) {
+    parts.push(p.admin1)
+  }
+  if (p.country) {
+    parts.push(p.country)
+  }
+  return parts.join(", ")
+}
+
+fn deg(n) {
+  return Math.round(n) + "°"
+}
+
+fn dayName(iso, i) {
+  if (i === 0) {
+    return "Today"
+  }
+  let d = new Date(iso + "T12:00:00Z")
+  return DAYS[d.getUTCDay()]
+}
+
+fn forecastRows(place, data, unit) {
+  let c = data.current
+  let now = code(c.weather_code)
+  let speed = unit === "f" ? " mph" : " km/h"
+  let rows = [{
+    title: deg(c.temperature_2m) + " " + now[0] + " in " + place.name,
+    subtitle: "Feels like " + deg(c.apparent_temperature) + " · humidity " + c.relative_humidity_2m + "% · wind " + Math.round(c.wind_speed_10m) + speed + " · " + placeName(place),
+    icon: "symbol:" + now[1],
+    action: { copy: deg(c.temperature_2m) + (unit === "f" ? "F" : "C") + ", " + now[0].toLowerCase() + " in " + placeName(place), hud: "Copied the weather" }
+  }]
+  let d = data.daily
+  for (let i = 0; i < d.time.length; i = i + 1) {
+    let w = code(d.weather_code[i])
+    let rain = d.precipitation_probability_max ? d.precipitation_probability_max[i] : null
+    rows.push({
+      title: dayName(d.time[i], i) + "  " + deg(d.temperature_2m_max[i]) + " / " + deg(d.temperature_2m_min[i]),
+      subtitle: w[0] + (rain !== null && rain > 0 ? " · " + rain + "% chance of rain" : ""),
+      icon: "symbol:" + w[1],
+      action: { copy: dayName(d.time[i], i) + ": " + w[0].toLowerCase() + ", " + deg(d.temperature_2m_max[i]) + " / " + deg(d.temperature_2m_min[i]), hud: "Copied the forecast" }
+    })
+  }
+  return rows
+}
+
+fn list(command, text) {
+  let words = text.trim().split(" ").filter((w) => w !== "")
+  let unit = moo.store.get("unit") === "f" ? "f" : "c"
+  let last = words.length > 0 ? words[words.length - 1].toLowerCase() : ""
+  if (last === "f" || last === "c") {
+    unit = last
+    moo.store.set("unit", unit)
+    words = words.slice(0, words.length - 1)
+  }
+  let q = words.join(" ").toLowerCase()
+  let place = null
+  let others = []
+  if (q === "") {
+    place = parse(moo.store.get("place"), null)
+    if (place === null) {
+      return notice("Type a city", "weather paris · weather tokyo f")
+    }
+  } else {
+    if (q.length < 2) {
+      return notice("Type a city", "weather paris · weather tokyo f")
+    }
+    let found = lookup(q)
+    if (!found.done) {
+      return notice("Looking up “" + q + "”…", "Open-Meteo")
+    }
+    if (found.error !== "") {
+      return notice("Couldn't look that up", found.error)
+    }
+    if (found.places.length === 0) {
+      return notice("No place called “" + q + "”", "Try a bigger city nearby")
+    }
+    place = found.places[0]
+    others = found.places.slice(1)
+  }
+  let f = forecast(place, unit)
+  if (!f.done) {
+    return notice("Getting the weather for " + placeName(place) + "…", "Open-Meteo")
+  }
+  if (f.error !== "") {
+    return notice("Couldn't get the weather", f.error)
+  }
+  moo.store.set("place", JSON.stringify({ name: place.name, admin1: place.admin1 ? place.admin1 : "", country: place.country ? place.country : "", latitude: place.latitude, longitude: place.longitude }))
+  let rows = forecastRows(place, f.data, unit)
+  for (let i = 0; i < others.length; i = i + 1) {
+    rows.push({ title: "Did you mean " + placeName(others[i]) + "?", subtitle: "Type a more specific name", icon: "symbol:mappin.and.ellipse" })
+  }
+  return rows
+}
+
+register({
+  manifest: () => ({
+    id: "weather",
+    title: "Weather",
+    icon: "symbol:cloud.sun",
+    permissions: { network: ["api.open-meteo.com", "geocoding-api.open-meteo.com"] },
+    commands: [
+      { name: "weather", title: "Weather", subtitle: "Now and the next 7 days", mode: "list", keyword: "weather", icon: "symbol:cloud.sun" }
+    ]
+  }),
+  run: (command) => null,
+  list: list
+})

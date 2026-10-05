@@ -1,0 +1,179 @@
+// Package Search: npm, crates.io, Homebrew and PyPI from the launcher. A Tier A plugin that
+// reaches only the registries its manifest names.
+//
+//   npm react        search npm          crate serde     search crates.io
+//   brew ripgrep     a Homebrew formula or cask (by exact name; Homebrew has no search API)
+//   pip requests     a PyPI project (by exact name; PyPI has no search API)
+//
+// Return opens the package's page; the row under each result copies its install command.
+
+const REGISTRIES = {
+  npm: { title: "npm", icon: "shippingbox" },
+  crate: { title: "crates.io", icon: "shippingbox.fill" },
+  brew: { title: "Homebrew", icon: "mug" },
+  pip: { title: "PyPI", icon: "cube" }
+}
+const LIMIT = 8
+
+fn parse(text) {
+  try {
+    return text ? JSON.parse(text) : null
+  } catch (e) {
+    return null
+  }
+}
+
+// Searches by "<registry>:<query>": { done, items: [{ name, version, description, url, install }], error }.
+let searches = {}
+
+fn get(url, cb) {
+  // crates.io turns away requests without a User-Agent.
+  moo.fetch({ method: "GET", url: url, headers: { "User-Agent": "Moo launcher (https://moo.moi)", Accept: "application/json" } }, (r) => {
+    cb(r.error === "" && r.status < 400 ? parse(r.body) : null, r.error !== "" ? r.error : r.status)
+  })
+}
+
+fn npm(q, done) {
+  get("https://registry.npmjs.org/-/v1/search?size=" + LIMIT + "&text=" + encodeURIComponent(q), (body) => {
+    if (body === null || !body.objects) {
+      done(null)
+      return
+    }
+    done(body.objects.map((o) => ({
+      name: o.package.name,
+      version: o.package.version,
+      description: o.package.description ? o.package.description : "",
+      url: "https://www.npmjs.com/package/" + o.package.name,
+      install: "npm i " + o.package.name
+    })))
+  })
+}
+
+fn crates(q, done) {
+  get("https://crates.io/api/v1/crates?per_page=" + LIMIT + "&q=" + encodeURIComponent(q), (body) => {
+    if (body === null || !body.crates) {
+      done(null)
+      return
+    }
+    done(body.crates.map((c) => ({
+      name: c.name,
+      version: c.max_stable_version ? c.max_stable_version : c.newest_version,
+      description: c.description ? c.description.trim() : "",
+      url: "https://crates.io/crates/" + c.name,
+      install: "cargo add " + c.name
+    })))
+  })
+}
+
+// Homebrew: the formula and the cask of that exact name, whichever exist.
+fn brew(q, done) {
+  let name = q.toLowerCase().replaceAll(" ", "-")
+  let found = []
+  let pending = 2
+  let finish = () => {
+    pending = pending - 1
+    if (pending === 0) {
+      done(found)
+    }
+  }
+  get("https://formulae.brew.sh/api/formula/" + encodeURIComponent(name) + ".json", (f) => {
+    if (f !== null && f.name) {
+      found.unshift({ name: f.name, version: f.versions ? f.versions.stable : "", description: f.desc ? f.desc : "", url: "https://formulae.brew.sh/formula/" + f.name, install: "brew install " + f.name })
+    }
+    finish()
+  })
+  get("https://formulae.brew.sh/api/cask/" + encodeURIComponent(name) + ".json", (c) => {
+    if (c !== null && c.token) {
+      found.push({ name: c.token + " (cask)", version: c.version ? c.version : "", description: c.desc ? c.desc : (c.name ? c.name.join(", ") : ""), url: "https://formulae.brew.sh/cask/" + c.token, install: "brew install --cask " + c.token })
+    }
+    finish()
+  })
+}
+
+fn pypi(q, done) {
+  let name = q.trim().replaceAll(" ", "-")
+  get("https://pypi.org/pypi/" + encodeURIComponent(name) + "/json", (body) => {
+    if (body === null || !body.info) {
+      done([])
+      return
+    }
+    let i = body.info
+    done([{ name: i.name, version: i.version, description: i.summary ? i.summary : "", url: "https://pypi.org/project/" + i.name + "/", install: "pip install " + i.name }])
+  })
+}
+
+fn search(registry, q) {
+  let key = registry + ":" + q
+  if (key in searches) {
+    return searches[key]
+  }
+  let entry = { done: false, items: [], error: "" }
+  searches[key] = entry
+  let done = (items) => {
+    entry.done = true
+    if (items === null) {
+      entry.error = REGISTRIES[registry].title + " didn't answer"
+    } else {
+      entry.items = items
+    }
+    moo.refresh()
+  }
+  if (registry === "npm") {
+    npm(q, done)
+  } else if (registry === "crate") {
+    crates(q, done)
+  } else if (registry === "brew") {
+    brew(q, done)
+  } else {
+    pypi(q, done)
+  }
+  return entry
+}
+
+fn rows(registry, items) {
+  let out = []
+  let icon = "symbol:" + REGISTRIES[registry].icon
+  for (let i = 0; i < items.length; i = i + 1) {
+    let p = items[i]
+    out.push({ title: p.name + (p.version ? "  " + p.version : ""), subtitle: p.description, icon: icon, action: { open: p.url } })
+    out.push({ title: p.install, subtitle: "Copy the install command", icon: "symbol:terminal", action: { copy: p.install, hud: "Copied " + p.install } })
+  }
+  return out
+}
+
+fn list(command, text) {
+  let reg = REGISTRIES[command]
+  let q = text.trim()
+  if (q === "") {
+    let hint = command === "brew" || command === "pip" ? "The exact package name" : "Type a package name or keywords"
+    return [{ title: "Search " + reg.title, subtitle: hint, icon: "symbol:" + reg.icon }]
+  }
+  let s = search(command, q)
+  if (!s.done) {
+    return [{ title: "Searching " + reg.title + " for “" + q + "”…", subtitle: "", icon: "symbol:" + reg.icon }]
+  }
+  if (s.error !== "") {
+    return [{ title: s.error, subtitle: "Try again in a moment", icon: "symbol:exclamationmark.triangle" }]
+  }
+  if (s.items.length === 0) {
+    return [{ title: "Nothing on " + reg.title + " called “" + q + "”", subtitle: command === "brew" || command === "pip" ? "This search needs the exact name" : "", icon: "symbol:" + reg.icon }]
+  }
+  return rows(command, s.items)
+}
+
+register({
+  manifest: () => ({
+    id: "packages",
+    title: "Package Search",
+    icon: "symbol:shippingbox",
+    permissions: { network: ["registry.npmjs.org", "crates.io", "formulae.brew.sh", "pypi.org"] },
+    commands: [
+      { name: "npm", title: "Search npm", subtitle: "JavaScript packages", mode: "list", keyword: "npm", icon: "symbol:shippingbox" },
+      { name: "crate", title: "Search crates.io", subtitle: "Rust crates", mode: "list", keyword: "crate", icon: "symbol:shippingbox.fill" },
+      { name: "brew", title: "Search Homebrew", subtitle: "Formulae and casks", mode: "list", keyword: "brew", icon: "symbol:mug" },
+      { name: "pip", title: "Search PyPI", subtitle: "Python packages", mode: "list", keyword: "pip", icon: "symbol:cube" }
+    ]
+  }),
+  run: (command) => null,
+  list: list
+})

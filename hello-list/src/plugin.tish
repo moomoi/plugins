@@ -3,7 +3,7 @@
 //   "Hello List": the shell filters the items; enter stars one (component state).
 //   "Change Case": the plugin handles the search text itself; enter copies a variant.
 
-import { h, useState, List, ListItem, ListSection, ListEmptyView, definePlugin } from "../../../packages/ui/src/ui.tish"
+import { h, useState, List, ListItem, ListSection, ListEmptyView, definePlugin } from "../../sdk/ui/ui.tish"
 
 const GREETINGS = [
   ["Hello", "English"], ["Hola", "Spanish"], ["Bonjour", "French"], ["Hallo", "German"],

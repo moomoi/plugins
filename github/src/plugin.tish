@@ -1,0 +1,276 @@
+// GitHub: your pull requests, review requests, issues and notifications, and repository search.
+// A Tier A plugin that reaches only api.github.com. It signs in with a personal access token,
+// kept in the Keychain: any command leads to "Add GitHub Token", which opens GitHub's token page
+// with the scopes filled in.
+//
+//   gh moo            search repositories (your own most recent first when the field is empty)
+
+const API = "https://api.github.com"
+const NEW_TOKEN = "https://github.com/settings/tokens/new?description=Moo&scopes=repo,notifications,read:org"
+const CACHE_MS = 60 * 1000
+
+fn parse(text) {
+  try {
+    return text ? JSON.parse(text) : null
+  } catch (e) {
+    return null
+  }
+}
+
+// null until read from the Keychain, "" when signed out.
+let token = null
+let login = moo.store.get("login")
+// Loads by "<command>:<query>": { at, done, rows, error }.
+let loads = {}
+
+fn userToken() {
+  if (token === null) {
+    token = moo.secret.get("token")
+  }
+  return token
+}
+
+fn signedIn() {
+  return userToken() !== ""
+}
+
+fn forget() {
+  token = ""
+  login = ""
+  loads = {}
+  moo.secret.remove("token")
+  moo.store.remove("login")
+}
+
+fn api(path, cb) {
+  moo.fetch({
+    method: "GET",
+    url: API + path,
+    headers: { Authorization: "Bearer " + userToken(), Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Moo launcher" }
+  }, (r) => {
+    if (r.error !== "") {
+      cb(null, r.error)
+      return
+    }
+    if (r.status === 401) {
+      forget()
+      moo.notify("GitHub didn't accept the token. Add a new one")
+      moo.refresh()
+      cb(null, "Signed out")
+      return
+    }
+    let body = parse(r.body)
+    if (r.status >= 400 || body === null) {
+      cb(null, body && body.message ? body.message : "GitHub answered " + r.status)
+      return
+    }
+    cb(body, "")
+  })
+}
+
+fn ago(iso) {
+  let s = Math.round((Date.now() - Date.parse(iso)) / 1000)
+  if (s < 3600) {
+    return Math.max(1, Math.round(s / 60)) + "m ago"
+  }
+  if (s < 86400) {
+    return Math.round(s / 3600) + "h ago"
+  }
+  return Math.round(s / 86400) + "d ago"
+}
+
+// "https://github.com/owner/repo/pull/12" -> "owner/repo#12"
+fn ref(url) {
+  let parts = url.split("/")
+  return parts.length >= 7 ? parts[3] + "/" + parts[4] + "#" + parts[6] : url
+}
+
+fn issueRow(it) {
+  let pr = it.pull_request ? true : false
+  let icon = pr ? (it.draft ? "symbol:arrow.triangle.pull" : "symbol:arrow.triangle.branch") : "symbol:exclamationmark.circle"
+  return {
+    title: it.title,
+    subtitle: ref(it.html_url) + " · " + it.user.login + " · updated " + ago(it.updated_at) + (it.comments > 0 ? " · " + it.comments + " comments" : ""),
+    icon: icon,
+    action: { open: it.html_url }
+  }
+}
+
+fn repoRow(r) {
+  let bits = [r.full_name]
+  if (r.language) {
+    bits.push(r.language)
+  }
+  bits.push("★ " + r.stargazers_count)
+  return { title: r.full_name, subtitle: (r.description ? r.description + " · " : "") + bits.slice(1).join(" · "), icon: r.private ? "symbol:lock" : "symbol:book.closed", action: { open: r.html_url } }
+}
+
+// An API URL in a notification -> the page for it.
+fn webUrl(apiUrl, repo) {
+  if (!apiUrl) {
+    return repo.html_url + "/notifications"
+  }
+  return apiUrl.replace("https://api.github.com/repos/", "https://github.com/").replace("/pulls/", "/pull/").replace("/commits/", "/commit/")
+}
+
+fn notificationRow(n) {
+  let kind = n.subject.type
+  let icon = kind === "PullRequest" ? "symbol:arrow.triangle.branch" : kind === "Issue" ? "symbol:exclamationmark.circle" : kind === "Release" ? "symbol:tag" : "symbol:bell"
+  return {
+    title: n.subject.title,
+    subtitle: n.repository.full_name + " · " + n.reason.replaceAll("_", " ") + " · " + ago(n.updated_at),
+    icon: icon,
+    action: { open: webUrl(n.subject.url, n.repository) }
+  }
+}
+
+fn load(key, path, toRows) {
+  let have = loads[key]
+  if (have && (!have.done || Date.now() - have.at < CACHE_MS)) {
+    return have
+  }
+  let entry = { at: Date.now(), done: false, rows: [], error: "" }
+  loads[key] = entry
+  api(path, (body, error) => {
+    entry.done = true
+    entry.error = error
+    entry.rows = body !== null ? toRows(body) : []
+    moo.refresh()
+  })
+  return entry
+}
+
+fn issueSearch(q) {
+  return "/search/issues?per_page=30&sort=updated&q=" + encodeURIComponent(q)
+}
+
+const LISTS = {
+  prs: { q: "is:pr is:open author:@me archived:false", empty: "No open pull requests" },
+  reviews: { q: "is:pr is:open review-requested:@me archived:false", empty: "No reviews waiting on you" },
+  issues: { q: "is:issue is:open assignee:@me archived:false", empty: "No issues assigned to you" }
+}
+
+fn notice(title, subtitle) {
+  return [{ title: title, subtitle: subtitle, icon: "symbol:arrow.triangle.branch" }]
+}
+
+fn matches(row, q) {
+  return q === "" || row.title.toLowerCase().indexOf(q) >= 0 || row.subtitle.toLowerCase().indexOf(q) >= 0
+}
+
+fn present(entry, q, empty) {
+  if (!entry.done) {
+    return notice("Loading from GitHub…", login !== "" ? "as " + login : "")
+  }
+  if (entry.error !== "") {
+    return notice("GitHub: " + entry.error, "")
+  }
+  let rows = entry.rows.filter((r) => matches(r, q))
+  return rows.length > 0 ? rows : notice(q === "" ? empty : "Nothing matches “" + q + "”", "")
+}
+
+fn list(command, text) {
+  let q = text.trim().toLowerCase()
+  if (command in LISTS) {
+    let l = LISTS[command]
+    return present(load(command, issueSearch(l.q), (b) => b.items.map(issueRow)), q, l.empty)
+  }
+  if (command === "notifications") {
+    return present(load("notifications", "/notifications?per_page=50", (b) => b.map(notificationRow)), q, "You're all caught up")
+  }
+  if (command === "repos") {
+    if (q.length < 2) {
+      return present(load("repos:", "/user/repos?per_page=50&sort=pushed", (b) => b.map(repoRow)), q, "No repositories")
+    }
+    return present(load("repos:" + q, "/search/repositories?per_page=20&q=" + encodeURIComponent(q), (b) => b.items.map(repoRow)), "", "No repositories match “" + q + "”")
+  }
+  return []
+}
+
+fn saveToken(value) {
+  let t = value.trim()
+  if (t === "") {
+    return { hud: "Paste a GitHub token" }
+  }
+  token = t
+  loads = {}
+  moo.secret.set("token", t)
+  api("/user", (body, error) => {
+    if (body === null) {
+      forget()
+      moo.notify("GitHub didn't accept that token: " + error)
+    } else {
+      login = body.login
+      moo.store.set("login", login)
+      moo.notify("Signed in to GitHub as " + login)
+    }
+    moo.refresh()
+  })
+  return { hud: "Checking the token…" }
+}
+
+fn run(command, args) {
+  if (command === "token") {
+    return saveToken(args.token)
+  }
+  if (command === "signout") {
+    let who = login
+    forget()
+    return { hud: "Signed out of GitHub" + (who !== "" ? " (" + who + ")" : "") }
+  }
+  return null
+}
+
+// While the token field is empty: how to get one.
+fn suggest(command, argument, text) {
+  if (command !== "token") {
+    return []
+  }
+  return [{ title: "Create a Token on GitHub", subtitle: "Opens GitHub with the scopes Moo needs; copy it, then paste it here", icon: "symbol:safari", action: { open: NEW_TOKEN, stay: true, hud: "Generate the token, copy it, then paste it here" } }]
+}
+
+fn blocker(command) {
+  if (command === "token" || command === "signout" || signedIn()) {
+    return null
+  }
+  return { title: "Add GitHub Token", subtitle: "Needed to read your pull requests, issues and notifications", icon: "symbol:key", action: { run: "token" } }
+}
+
+fn visible(command) {
+  if (command === "token") {
+    return !signedIn()
+  }
+  if (command === "signout") {
+    return signedIn()
+  }
+  return true
+}
+
+register({
+  manifest: () => ({
+    id: "github",
+    title: "GitHub",
+    icon: "symbol:arrow.triangle.branch",
+    permissions: { network: ["api.github.com"] },
+    commands: [
+      { name: "repos", title: "Search GitHub Repositories", mode: "list", keyword: "gh", icon: "symbol:book.closed" },
+      { name: "prs", title: "My Pull Requests", mode: "list", icon: "symbol:arrow.triangle.branch" },
+      { name: "reviews", title: "Review Requests", mode: "list", icon: "symbol:eye" },
+      { name: "issues", title: "My GitHub Issues", mode: "list", icon: "symbol:exclamationmark.circle" },
+      { name: "notifications", title: "GitHub Notifications", mode: "list", icon: "symbol:bell" },
+      {
+        name: "token",
+        title: "Add GitHub Token",
+        mode: "no-view",
+        icon: "symbol:key",
+        arguments: [{ name: "token", placeholder: "Personal access token", type: "text", required: true }]
+      },
+      { name: "signout", title: "Sign Out of GitHub", mode: "no-view", icon: "symbol:rectangle.portrait.and.arrow.right" }
+    ]
+  }),
+  run: run,
+  list: list,
+  suggest: suggest,
+  blocker: blocker,
+  visible: visible
+})

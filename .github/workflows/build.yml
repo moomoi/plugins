@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build every plugin
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            .toolchain/tish/target
+            target
+          key: tish-${{ runner.os }}-${{ hashFiles('toolchain/**') }}
+      - name: Tish compiler
+        run: bash toolchain/build.sh
+      - name: Plugins
+        run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins
+          path: dist/
