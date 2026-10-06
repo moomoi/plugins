@@ -40,8 +40,8 @@ reach only the hosts its manifest lists.
 ## Build
 
 ```sh
-bash toolchain/build.sh     # the pinned Tish compiler, into .toolchain/ (prints TISH=...)
-TISH=.toolchain/tish/target/release/tish bash build.sh
+npm ci                      # the tish compiler and Lattish, from npm
+bash build.sh
 ```
 
 `build.sh` builds every folder with a `moo.json` into `dist/`: `<id>.tishc` for Tier A and
@@ -94,10 +94,9 @@ Pull requests for new plugins are welcome. A plugin merged here ships in the nex
 appears in the [marketplace](https://moo.moi/marketplace). Keep each plugin to its own folder,
 build it with `bash build.sh`, and try it in Moo with `MOO_PLUGINS` before opening the PR.
 
-`sdk/ui` is the `@moo/ui` view toolkit (a copy of Moo's `packages/ui`), and `sdk/lattish` is
-[Lattish](https://github.com/tishlang/lattish), which it builds on (its own license is in that
-folder).
+`sdk/ui` is the `@moo/ui` view toolkit (a copy of Moo's `packages/ui`). It builds on
+[Lattish](https://github.com/tishlang/lattish), installed from npm.
 
 ## License
 
-[MIT](LICENSE), except `sdk/lattish` (see its LICENSE).
+[MIT](LICENSE)

@@ -2,11 +2,13 @@
 # Build every plugin into dist/, by the tier its moo.json declares:
 #   A: bytecode chunk (<id>.tishc), run by Moo in a capability-free VM
 #   B: native module (<id>.lib), loaded in-process through tish:ffi
-# TISH names the compiler (toolchain/build.sh builds the pinned one). Inside Moo's own repo, where
-# this repo is the plugins/ submodule, native builds share Moo's target/ directory.
+# TISH names the compiler (default: the npm one, from package.json). Inside Moo's own repo, where
+# this repo is the plugins/ submodule, Moo's scripts pass theirs and native builds share Moo's
+# target/ directory.
 set -euo pipefail
 cd "$(dirname "$0")"
-TISH="${TISH:-/Users/a_/Projects/tish/tish-nimble/target/release/tish}"
+[ -n "${TISH:-}" ] || [ -x node_modules/.bin/tish ] || npm ci --no-audit --no-fund
+TISH="${TISH:-$(pwd)/node_modules/.bin/tish}"
 unset CARGO_TARGET_DIR
 if [ -f ../toolchain.env ]; then
   DEFAULT_TARGET="$(cd .. && pwd)/target/tish-native"
