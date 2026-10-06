@@ -16,16 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
-            .toolchain/tish/target
             target
-          key: tish-${{ runner.os }}-${{ hashFiles('toolchain/**') }}
-      - name: Tish compiler
-        run: bash toolchain/build.sh
+          key: cargo-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Tish compiler and Lattish (npm)
+        run: npm ci --no-audit --no-fund
       - name: Plugins
         run: bash build.sh
       - uses: actions/upload-artifact@v4
