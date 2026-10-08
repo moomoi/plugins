@@ -1,0 +1,20 @@
+{
+  "branches": [
+    "main"
+  ],
+  "plugins": [
+    "@sem/commit-analyzer",
+    "@sem/release-notes-generator",
+    [
+      "@sem/github",
+      {
+        "prerelease": true,
+        "successComment": false,
+        "assets": [
+          { "path": "dist/release/moo-plugins.tar.gz", "label": "Every plugin, built (bytecode and universal native)" },
+          { "path": "dist/release/SHA256SUMS", "label": "SHA-256 checksums" }
+        ]
+      }
+    ]
+  ]
+}

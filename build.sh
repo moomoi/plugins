@@ -2,9 +2,9 @@
 # Build every plugin into dist/, by the tier its moo.json declares:
 #   A: bytecode chunk (<id>.tishc), run by Moo in a capability-free VM
 #   B: native module (<id>.lib), loaded in-process through tish:ffi
-# TISH names the compiler (default: the npm one, from package.json). Inside Moo's own repo, where
-# this repo is the plugins/ submodule, Moo's scripts pass theirs and native builds share Moo's
-# target/ directory.
+# TISH names the compiler (default: the npm one, from package.json). When this checkout sits
+# inside Moo's repo (developing a plugin against Moo), native builds share Moo's target/ directory.
+# Releases: scripts/package.sh builds both architectures and packs what Moo downloads.
 set -euo pipefail
 cd "$(dirname "$0")"
 [ -n "${TISH:-}" ] || [ -x node_modules/.bin/tish ] || npm ci --no-audit --no-fund
