@@ -1,6 +1,7 @@
 # On a main push whose commits warrant a release (feat / fix / perf / BREAKING CHANGE), build every
 # plugin for Apple silicon and Intel and publish a prerelease with moo-plugins.tar.gz attached.
 # Moo pins a version (plugins.version in moomoi/moo) and downloads it instead of building plugins.
+# macOS plugins come from the macOS job, Windows ones (moo-plugins-windows.tar.gz) from a Linux job.
 #
 #   version -> build (scripts/package.sh) -> release (sem tags vX.Y.Z, prerelease)
 
@@ -84,9 +85,41 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  build-windows:
+    name: Build every plugin (Windows x64)
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    # Cross-built on Linux (cheaper than Windows): native plugins become DLLs through cargo-xwin.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      XWIN_ACCEPT_LICENSE: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Cross tools (LLVM, cargo-xwin)
+        run: |
+          sudo apt-get install -y clang lld llvm >/dev/null
+          cargo install cargo-xwin --locked
+      - name: Tish compiler and Lattish (npm)
+        run: npm ci --no-audit --no-fund
+      - name: Package
+        run: bash scripts/package-windows.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: moo-plugins-windows
+          path: dist/release/moo-plugins-windows.tar.gz
+          if-no-files-found: error
+
   release:
     name: Prerelease
-    needs: [version, build]
+    needs: [version, build, build-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -100,6 +133,12 @@ jobs:
         with:
           name: moo-plugins
           path: dist/release
+      - uses: actions/download-artifact@v4
+        with:
+          name: moo-plugins-windows
+          path: dist/release
+      - name: Checksums for both tarballs
+        run: cd dist/release && sha256sum moo-plugins.tar.gz moo-plugins-windows.tar.gz > SHA256SUMS && cat SHA256SUMS
       - name: Configure git identity for the release tag
         run: |
           git config user.name "github-actions[bot]"

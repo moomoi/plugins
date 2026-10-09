@@ -11,7 +11,8 @@
         "prerelease": true,
         "successComment": false,
         "assets": [
-          { "path": "dist/release/moo-plugins.tar.gz", "label": "Every plugin, built (bytecode and universal native)" },
+          { "path": "dist/release/moo-plugins.tar.gz", "label": "Every plugin, built for macOS (bytecode and universal native)" },
+          { "path": "dist/release/moo-plugins-windows.tar.gz", "label": "Every plugin, built for Windows x64 (bytecode and native DLLs)" },
           { "path": "dist/release/SHA256SUMS", "label": "SHA-256 checksums" }
         ]
       }
